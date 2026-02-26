@@ -1,0 +1,118 @@
+version: "3.9"
+
+# ─────────────────────────────────────────────────────────
+# VacaPlan AI — Local Full-Stack Setup
+#
+# Services:
+#   backend   FastAPI + LangGraph agent (port 8000)
+#   frontend  React dev server (port 3000)
+#   redis     Session cache (port 6379)
+#   postgres  Booking audit log (port 5432)
+#   chroma    Vector store for activity KB (port 8100)
+#   ollama    Local LLM inference (port 11434)
+# ─────────────────────────────────────────────────────────
+
+services:
+
+  # ── Backend (FastAPI + LangGraph) ────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - AMADEUS_API_KEY=${AMADEUS_API_KEY}
+      - AMADEUS_API_SECRET=${AMADEUS_API_SECRET}
+      - BOOKING_USERNAME=${BOOKING_USERNAME}
+      - BOOKING_PASSWORD=${BOOKING_PASSWORD}
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - BOOKING_HMAC_SECRET=${BOOKING_HMAC_SECRET}
+      - DATABASE_URL=postgresql://vacaplan:vacaplan@postgres:5432/vacaplan
+      - REDIS_HOST=redis
+      - CHROMA_HOST=chroma
+      - CHROMA_PORT=8000
+      - OLLAMA_URL=http://ollama:11434/api/embeddings
+      - USE_MOCK_APIS=${USE_MOCK_APIS:-true}
+    depends_on:
+      - redis
+      - postgres
+      - chroma
+    volumes:
+      - ./backend:/app
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ── Frontend (React) ─────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    restart: unless-stopped
+
+  # ── Redis (Session cache) ────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+
+  # ── PostgreSQL (Booking audit log) ───────────────────────
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: vacaplan
+      POSTGRES_PASSWORD: vacaplan
+      POSTGRES_DB: vacaplan
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    restart: unless-stopped
+
+  # ── ChromaDB (Vector store) ──────────────────────────────
+  chroma:
+    image: ghcr.io/chroma-core/chroma:latest
+    ports:
+      - "8100:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    restart: unless-stopped
+
+  # ── Ollama (Local LLM — optional, used for embeddings) ───
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    # Pull nomic-embed-text on first start:
+    # docker exec vacaplan-ollama ollama pull nomic-embed-text
+    # docker exec vacaplan-ollama ollama pull llama3.1
+
+volumes:
+  redis_data:
+  postgres_data:
+  chroma_data:
+  ollama_data:
